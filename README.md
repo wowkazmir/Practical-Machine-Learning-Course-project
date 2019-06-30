@@ -1,4 +1,4 @@
-## This repository contains the R code and the documentation for the Practical Machine Learning final course project.
+## This repository contains the R code and the documentation for the Practical Machine Learning course project.
 
 
 ### Review criteria
