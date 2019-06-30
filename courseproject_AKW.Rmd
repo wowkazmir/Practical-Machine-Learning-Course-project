@@ -1,0 +1,144 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Amyas Walji"
+date: "6/30/2019"
+output: html_document
+---
+
+## Introduction
+
+Through the development of wearable fitness trackers it has become possible to collect a large amount of data on physical activity relatively inexpensively. Using such devices, individuals tend to track how much of a particular activity they do, but rarely does the focus lay with how well they do it. This project utilizes data collected from accelerometers to identify the execution of a dumbbell bicep curl. Monitors were attached to participants’ belt, forearm, arm, and dumbell and measures were taken over 10 repetitions for five performance types. The five types were exactly according to the speciﬁcation (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). 
+
+```{r setup, include=FALSE}
+library(bookdown)
+library(caret)
+library(dplyr)
+library(gbm)
+library(kableExtra)
+library(MLmetrics)
+library(randomForest)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+```
+
+```{r load data, echo = TRUE}
+training <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"), header=TRUE)
+test <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"), header=TRUE)
+
+```
+
+## Processing the data
+Before the prediction analysis is carried out the data is first cleaned up. The training dataset contains 19622 rows and 160 variables. From these 160 variables there are several that contain missing values, which have been removed for this analysis. In addition, the first seven variables contain information on the subjects and are therfore not relevant for making predictions. Finally, all variables with near-zero variance are removed as well. The result is a dataset containing 53 variables which can be informative in making building predition models.
+
+```{r clean data, echo = TRUE}
+training <- training[, !apply(training, 2, function(x) any(is.na(x)))]
+training <- training[, -(1:7)]
+nzvCol <- nearZeroVar(training)
+training <- training[,-nzvCol]
+```
+
+For this analysis the training set is further split for the purpose of validation. The models are thus built with a new training dataset, then tested on a subset of this data. The portion of the original training set that will be used as validation accounts for 30 percent of the total observations.
+
+```{r training set, echo = TRUE}
+set.seed(3006)
+inTrain  <- createDataPartition(training$classe, p=0.7, list=FALSE)
+trainSet <- training[inTrain,]
+testSet  <- training[-inTrain,]
+```
+
+## Model Building
+
+This section explores how using supervised prediction methods the researcher sets out to build various models to predict how the subjects executed the bicep curl exercise. Since the aim of the study is to predict a discrete variable, the prediction algorithms explored in this analysis include classification trees using rpart, random forests and gradient boosting.
+
+### Decision tree using rpart
+```{r decision tree, echo = TRUE}
+trainCtrl <- trainControl(method = "repeatedcv", number = 4, repeats = 5, summaryFunction = multiClassSummary, classProbs = TRUE, verboseIter = FALSE)
+
+dt.fit <- train(classe ~., method = "rpart", data = trainSet, tuneLength = 50, trControl = trainCtrl)
+```
+
+```{r plot1, out.width = "125%", fig.align = "center", fig.cap = "Figure 1: Decision tree using rpart", echo = FALSE}
+fancyRpartPlot(dt.fit$finalModel)
+```
+
+The first model is a carefully tuned decision tree which is capable of predicting the execution for a majority of the classes (Accuracy = 0.90). This finding indicates that the model represents a solid description of the reality and the noise in the data. However, the constructed tree is rather deep, branching out into many leaves to include all the predictors (figure 1). This suggests the model may be overfitting the training data to some degree.
+
+```{r predict model1, echo = TRUE}
+trainPred1 <- predict(dt.fit,newdata = testSet)
+confMatrix1 <- confusionMatrix(trainPred1,testSet$classe)
+confMatrix1$table
+round(confMatrix1$overall[1], 3)
+oosError <- round(1 - confMatrix1$overall[1], 3)
+```
+
+### Random forests
+A second approach to predicting the execution class of the bicep curl exercise could then be to apply a random forests algorithm. While random forests still rely on building decision trees, the method trains on different samples of the data and uses a random subset of predictors. Through aggregating these trees one is able to minimize the error due to variance in the data. When using the random forests algorithm there is no need to separately control for cross-validation as this is estimated internally.
+
+```{r random forest, echo = TRUE}
+rf.fit <- randomForest(classe ~., data = trainSet, importance = TRUE, ntree=500)
+rf.fit
+```
+
+```{r predict model2, echo = TRUE}
+trainPred2 <- predict(rf.fit,newdata = testSet)
+confMatrix2 <- confusionMatrix(trainPred2,testSet$classe)
+confMatrix2$table
+round(confMatrix2$overall[1], 3)
+oosError2 <- round(1 - confMatrix2$overall[1], 3)
+
+```
+
+```{r plot2, fig.align = "center", fig.cap = "Figure 2: Model error of random forests by number of trees", echo = FALSE}
+plot(rf.fit)
+```
+ 
+The random forests model yields a substantial increase in accuracy (Accuracy = 0.99) in predicting the execution class of the exercise in comparison to the single decision tree model. Given that the first model required careful tuning to yield a high accuracy, this model is much more robust and less prone to overfitting the training data. The random forests plot illustrates how the error rates converge at around 100 trees (figure 2), suggesting a minor tuning to the amount of trees generated could reduce computational requirements for future analyses. 
+
+### Gradient boosting machine
+
+Although the random forests algorithm yields a very high accuracy, the model may be prone to overfiting the data to some degree too. Taking into account potential noise in the data, a third algorithm is explored. The boosting algorithm grows smaller but sequential trees and yields error rates comparable to random forets. However, the algorithm does require one to tune the model besides just specifying the number of trees. 
+
+```{r general boosted, echo = TRUE}
+gbmGrid <- expand.grid(interaction.depth = 4, shrinkage = 0.01, n.trees = 500, n.minobsinnode = 1)
+gbm.fit <- train(classe ~., method="gbm", data = trainSet, trControl = trainCtrl,  tuneGrid = gbmGrid, verbose=FALSE)
+gbm.fit
+```
+
+```{r predict model3, echo = TRUE}
+trainPred3 <- predict(gbm.fit,newdata = testSet)
+confMatrix3 <- confusionMatrix(trainPred3,testSet$classe)
+confMatrix3$table
+round(confMatrix3$overall[1], 3)
+oosError3 <- round(1 - confMatrix3$overall[1], 3)
+```
+
+The result is a model that yields an accuracy of 0.92, a predicitive performance that falls right in between that of the single decision tree and the random forests model. While gradient boosting can still lead to overfitting the training data, it is much less prone to do so than a single decision tree model.
+
+## Prediction
+
+Based on an assessment of the out-of-sample error estimates for the three models (table 1), the random forest algorithm outperformes both the single decision tree and boosting model. While it would be interesting to construct an ensemble of the three models, this would not be of much added value. Given the high accuracy of the models in and of themselves an ensemble would primarily increase the complexity and computing requirements for carrying out any predictions.
+
+```{r comparison table, echo = FALSE}
+resultsTable <- rbind(round(confMatrix1$overall[1], 3), round(confMatrix2$overall[1], 3), 
+                      round(confMatrix3$overall[1], 3))
+rownames(resultsTable) <- c("Single Decision Tree", "Random Forests", "Gradient Boosting")
+oosErrors <- rbind(oosError, oosError2, oosError3)
+resultsTable <- cbind(resultsTable, oosErrors)
+colnames(resultsTable) <- c("Accuracy", "Out of sample error estimate")
+kable(resultsTable, booktabs = T, caption = "Table 1: In and out-of-sample error estimates for the three models") %>% kable_styling(latex_options = c("striped", "scale_down", "hold_position"))
+```
+
+### Predictions on new data
+
+As a final requirement for this project, a model is to be selected to predict the execution class of the bicerp curl exercise on data outside of the training and validation set. Given our confidence in the predictive performance in the random forests algorithm on the validation data, this model has been selected to perfom a prediction on the test dataset. 
+
+```{r test prediction, echo = FALSE}
+testPredict <- predict(rf.fit, newdata = test)
+testResults <- data.frame(problem_id=test$problem_id, predicted=testPredict)
+kable(t(testResults), booktabs = T, col.names = NULL, caption = "Table 2: Predicting execution class in the testing dataset") %>% kable_styling(latex_options = c("striped", "scale_down", "hold_position"))
+```
+
+## Conclusion
+
+This project aimed to construct an accurate model to predict the different ways individuals execute a common bicep curl exercise. To achieve this, three algorithms were tested on a subset of data from the Human Activity Recognition (HAR) project. Throughout the model building process, findings were vizualized to allow for a more intuitive understanding of the predictive perfomance of each algorithm. Of the three algorithms tested, random forests yielded the highest accuracy, followed by the gradient boosting algorithm and the single decision tree model. Moreover, while the single decision tree and boosting models required substantial tuning to achieve their accuracy estimates, the random forests algorithm worked well “out of the box”. Having acquired this insight, the model constructed using the random forests algorithm deemed best suited for predicting the execution class in the new dataset. 
